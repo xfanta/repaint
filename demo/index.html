@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repaint POC</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --fg: #1d1d1f; --muted: #6b6b70; --card: #fff; --line: #e2e2de;
+    --stage: #1e1e20; --accent: #fa6831;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141416; --fg: #ececec; --muted: #9a9aa0; --card: #1d1d20; --line: #2c2c31; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; max-width: 760px; }
+  .layout { display: grid; grid-template-columns: 260px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 820px) { .layout { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+  .mat { display: grid; grid-template-columns: 22px 1fr 18px 44px; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .sw { width: 22px; height: 22px; border-radius: 5px; border: 1px solid #0003; }
+  .arrow { color: var(--muted); text-align: center; }
+  input[type=color] { width: 44px; height: 28px; border: 1px solid var(--line); border-radius: 6px; padding: 0; background: none; cursor: pointer; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  button { font: inherit; font-size: 12px; padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--bg); color: var(--fg); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  figure { margin: 0; }
+  .stage { background: var(--stage); border-radius: 8px; overflow: hidden; aspect-ratio: 440 / 240; }
+  .stage canvas, .stage img { width: 100%; height: 100%; display: block; image-rendering: auto; }
+  figcaption { margin-top: 6px; }
+  figcaption b { display: block; font-size: 13px; }
+  figcaption span { color: var(--muted); font-size: 12px; }
+  .chans { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+  .chans .stage { aspect-ratio: 440 / 240; }
+  .bad { color: #d64545; } .ok { color: #2e9e4f; }
+  code { font-size: 12px; }
+  .zoom { margin-top: 10px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Repaint – přebarvitelný náhled</h1>
+  <p class="lead">Slicer uloží místo hotových barev <em>masky</em>: index materiálu, stín a odlesk. Tiskárna pak barvu spočítá až podle
+    skutečně zavedených filamentů. Změň barvy vlevo; všechny panely se přepočítávají ze souborů v <code>out/</code>.</p>
+
+  <div class="layout">
+    <div class="card">
+      <h2>Sloty / filamenty</h2>
+      <div id="mats"></div>
+      <div class="presets" id="presets"></div>
+      <div class="zoom"><label><input type="checkbox" id="zoom"> zvětšit 2× (bez vyhlazení)</label></div>
+    </div>
+
+    <div>
+      <div class="grid">
+        <figure>
+          <div class="stage"><canvas id="cv-orig" width="440" height="240"></canvas></div>
+          <figcaption><b>Dnes: náhled z g-code</b><span>původní barvy, beze změny</span></figcaption>
+        </figure>
+        <figure>
+          <div class="stage"><canvas id="cv-base" width="440" height="240"></canvas></div>
+          <figcaption><b>Baseline: přebarvení bez masek</b><span>odhad materiálu podle barvy pixelu – selhává u černé/šedé/bílé a na hranách</span></figcaption>
+        </figure>
+        <figure>
+          <div class="stage"><img id="img-a" alt="Varianta A"></div>
+          <figcaption><b>A: indexované PNG + chunk <code>mtRL</code></b><span id="info-a"></span></figcaption>
+        </figure>
+        <figure>
+          <div class="stage"><canvas id="cv-b" width="440" height="240"></canvas></div>
+          <figcaption><b>B: G-buffer v QOI</b><span id="info-b"></span></figcaption>
+        </figure>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h2>Co je uvnitř varianty B (kanály QOI)</h2>
+        <div class="chans">
+          <figure><div class="stage"><canvas id="ch-mat" width="440" height="240"></canvas></div><figcaption><span>B = materiály m1|m2 (maska, hrany smíchané)</span></figcaption></figure>
+          <figure><div class="stage"><canvas id="ch-d" width="440" height="240"></canvas></div><figcaption><span>R = difúzní stín</span></figcaption></figure>
+          <figure><div class="stage"><canvas id="ch-s" width="440" height="240"></canvas></div><figcaption><span>G = odlesk (A = pokrytí nebo váha směsi)</span></figcaption></figure>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const OUT = '../out/';
+const PRESETS = {
+  'Původní': null,
+  'Prohození slotů': ['#2b2b2e', '#2f6fd8', '#f2c230', '#fa6831', '#8a8c91'],
+  'Úplně jiné': ['#c81d25', '#2e9e4f', '#7a3fb5', '#f0f0ec', '#1a1a1c'],
+  'Šedé odstíny': ['#eeeeea', '#fa6831', '#2b2b2e', '#2f6fd8', '#fa6831'],
+};
+
+// ---------- QOI dekodér (stejně jednoduchý, jako ve firmware) ----------
+function qoiDecode(buf) {
+  const d = new Uint8Array(buf), dv = new DataView(buf);
+  const w = dv.getUint32(4), h = dv.getUint32(8), n = w * h;
+  const out = new Uint8ClampedArray(n * 4), idx = new Uint8Array(256);
+  let r = 0, g = 0, b = 0, a = 255, p = 14, o = 0;
+  while (o < n * 4) {
+    const b1 = d[p++];
+    if (b1 === 0xfe) { r = d[p++]; g = d[p++]; b = d[p++]; }
+    else if (b1 === 0xff) { r = d[p++]; g = d[p++]; b = d[p++]; a = d[p++]; }
+    else if ((b1 >> 6) === 0) { const i = b1 * 4; r = idx[i]; g = idx[i+1]; b = idx[i+2]; a = idx[i+3]; }
+    else if ((b1 >> 6) === 1) { r = (r + ((b1 >> 4) & 3) - 2) & 255; g = (g + ((b1 >> 2) & 3) - 2) & 255; b = (b + (b1 & 3) - 2) & 255; }
+    else if ((b1 >> 6) === 2) { const b2 = d[p++], vg = (b1 & 63) - 32;
+      r = (r + vg - 8 + (b2 >> 4)) & 255; g = (g + vg) & 255; b = (b + vg - 8 + (b2 & 15)) & 255; }
+    else { let run = (b1 & 63) + 1; while (run--) { out[o++] = r; out[o++] = g; out[o++] = b; out[o++] = a; } continue; }
+    const hi = ((r * 3 + g * 5 + b * 7 + a * 11) % 64) * 4;
+    idx[hi] = r; idx[hi+1] = g; idx[hi+2] = b; idx[hi+3] = a;
+    out[o++] = r; out[o++] = g; out[o++] = b; out[o++] = a;
+  }
+  return { w, h, data: out };
+}
+
+// ---------- PNG chunky + CRC ----------
+const CRC = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+function crc32(bytes) { let c = 0xffffffff; for (const x of bytes) c = CRC[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+function chunks(u8) {
+  const dv = new DataView(u8.buffer, u8.byteOffset), res = [];
+  for (let p = 8; p < u8.length;) {
+    const len = dv.getUint32(p), tag = String.fromCharCode(...u8.subarray(p + 4, p + 8));
+    res.push({ tag, start: p, data: u8.subarray(p + 8, p + 8 + len) }); p += 12 + len;
+  }
+  return res;
+}
+
+// ---------- barevný model (celočíselně, shodně s firmware) ----------
+const shade = (c, D, S) => Math.min(255, ((c * D + 127) / 255 | 0) + S);
+const mix = (a, b, w) => (a * w + b * (255 - w) + 127) / 255 | 0;
+
+// ---------- Varianta A: firmware jen přepíše PLTE ----------
+function recolorA(png, entries, palette) {
+  const out = png.slice();                         // kopie souboru
+  const plte = chunks(out).find(c => c.tag === 'PLTE');
+  for (let i = 0; i < entries.length; i++) {
+    const [m1, m2, w, D, S] = entries[i];
+    if (m1 === 255 || !palette[m1] || !palette[m2]) continue;
+    for (let k = 0; k < 3; k++) plte.data[i * 3 + k] = shade(mix(palette[m1][k], palette[m2][k], w), D, S);
+  }
+  const dv = new DataView(out.buffer);
+  dv.setUint32(plte.start + 8 + plte.data.length, crc32(out.subarray(plte.start + 4, plte.start + 8 + plte.data.length)));
+  return out;
+}
+
+// ---------- Varianta B: per-pixel LUT (B = m1<<4 | m2, A = pokrytí nebo váha směsi) ----------
+function recolorB(g, palette, dst) {
+  const s = g.data, o = dst.data;
+  for (let i = 0; i < s.length; i += 4) {
+    const D = s[i], S = s[i+1], b = s[i+2], m1 = b >> 4, m2 = b & 15, A = s[i+3];
+    const c1 = palette[m1], c2 = palette[m2];
+    if (b === 255 || !c1 || !c2) { o[i] = o[i+1] = o[i+2] = o[i+3] = 0; continue; }
+    const w = m1 === m2 ? 255 : A;
+    for (let k = 0; k < 3; k++) o[i+k] = shade(mix(c1[k], c2[k], w), D, S);
+    o[i+3] = m1 === m2 ? A : 255;
+  }
+}
+
+// ---------- Baseline: odhad materiálu z RGB ----------
+function recolorBaseline(img, orig, palette, dst, lam = 3) {
+  const s = img.data, o = dst.data;
+  const pre = orig.map(v => { const oo = v[0]*v[0]+v[1]*v[1]+v[2]*v[2], so = v[0]+v[1]+v[2]; return { v, oo, so, det: oo * (3 + lam) - so * so }; });
+  for (let i = 0; i < s.length; i += 4) {
+    const c0 = s[i], c1 = s[i+1], c2 = s[i+2], sc = c0 + c1 + c2;
+    let best = Infinity, bm = 0, bd = 0, bs = 0;
+    pre.forEach((p, m) => {
+      const v = p.v, oc = c0*v[0] + c1*v[1] + c2*v[2];
+      let d = ((3 + lam) * oc - p.so * sc) / p.det; d = Math.max(0, Math.min(1, d));
+      const sh = Math.max(0, Math.min(255, (sc - d * p.so) / (3 + lam)));
+      const e0 = c0 - v[0]*d - sh, e1 = c1 - v[1]*d - sh, e2 = c2 - v[2]*d - sh, r = e0*e0 + e1*e1 + e2*e2;
+      if (r < best) { best = r; bm = m; bd = d; bs = sh; }
+    });
+    const n = palette[bm];
+    o[i] = n[0]*bd + bs; o[i+1] = n[1]*bd + bs; o[i+2] = n[2]*bd + bs; o[i+3] = s[i+3];
+  }
+}
+
+const hex2rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const kB = n => (n / 1024).toFixed(1) + ' kB';
+
+(async () => {
+  const [mats, origBuf, aBuf, bBuf] = await Promise.all([
+    fetch(OUT + 'materials.json').then(r => r.json()),
+    fetch(OUT + 'original.qoi').then(r => r.arrayBuffer()),
+    fetch(OUT + 'variant_a_indexed.png').then(r => r.arrayBuffer()),
+    fetch(OUT + 'variant_b_gbuffer.qoi').then(r => r.arrayBuffer()),
+  ]);
+  const orig = qoiDecode(origBuf), gb = qoiDecode(bBuf), pngA = new Uint8Array(aBuf);
+  const origPal = mats.map(m => hex2rgb(m.color));
+
+  // parse mtRL
+  const mt = chunks(pngA).find(c => c.tag === 'mtRL').data;
+  const nm = mt[1], off = 2 + 3 * nm, ne = (mt[off] << 8) | mt[off + 1];
+  const entries = Array.from({ length: ne }, (_, i) => Array.from(mt.subarray(off + 2 + i*5, off + 7 + i*5)));
+  const nSingle = entries.filter(e => e[0] !== 255 && e[0] === e[1]).length;
+  const nEdge = entries.filter(e => e[0] !== e[1]).length;
+
+  document.getElementById('info-a').textContent =
+    `${kB(pngA.length)} · ${ne} barev (${nSingle} čisté materiály, ${nEdge} směsi na hranách) · tiskárna přepíše jen PLTE = ${ne * 3} B, IDAT se nedotkne · staré tiskárny ukážou původní barvy`;
+  document.getElementById('info-b').textContent =
+    `${kB(bBuf.byteLength)} · 256 úrovní stínu, dva materiály na pixel (vyhlazené hrany) · per-pixel: mix(LUT[m1], LUT[m2], A)·R/255 + G · nutný nový typ náhledu`;
+
+  // kanály B
+  const show = (id, f) => { const cv = document.getElementById(id), ctx = cv.getContext('2d'), im = ctx.createImageData(440, 240);
+    for (let i = 0; i < gb.data.length; i += 4) { const [r, g, b] = f(gb.data, i); im.data[i] = r; im.data[i+1] = g; im.data[i+2] = b; const bb = gb.data[i+2]; im.data[i+3] = bb !== 255 && (bb >> 4) !== (bb & 15) ? 255 : gb.data[i+3]; }
+    ctx.putImageData(im, 0, 0); };
+  const ID_COL = [[230, 80, 80], [250, 200, 60], [90, 200, 120], [80, 150, 240], [190, 110, 230]];
+  show('ch-mat', (s, i) => { const b = s[i+2], c1 = ID_COL[b >> 4], c2 = ID_COL[b & 15];
+    if (b === 255 || !c1 || !c2) return [0, 0, 0];
+    const w = (b >> 4) === (b & 15) ? 255 : s[i+3]; return [0, 1, 2].map(k => mix(c1[k], c2[k], w)); });
+  show('ch-d', (s, i) => [s[i], s[i], s[i]]);
+  show('ch-s', (s, i) => [s[i+1], s[i+1], s[i+1]]);
+  document.getElementById('cv-orig').getContext('2d').putImageData(new ImageData(orig.data, 440, 240), 0, 0);
+
+  // UI
+  const box = document.getElementById('mats'), inputs = [];
+  mats.forEach((m, i) => {
+    const row = document.createElement('div'); row.className = 'mat';
+    row.innerHTML = `<div class="sw" style="background:${m.color}" title="původní"></div><div>${m.name}</div><div class="arrow">→</div>`;
+    const inp = document.createElement('input'); inp.type = 'color'; inp.value = m.color; inp.addEventListener('input', render);
+    row.appendChild(inp); box.appendChild(row); inputs.push(inp);
+  });
+  const pr = document.getElementById('presets');
+  for (const [name, pal] of Object.entries(PRESETS)) {
+    const b = document.createElement('button'); b.textContent = name;
+    b.onclick = () => { inputs.forEach((inp, i) => inp.value = pal ? pal[i] : mats[i].color); render(); };
+    pr.appendChild(b);
+  }
+  document.getElementById('zoom').onchange = e => {
+    document.querySelectorAll('.stage').forEach(s => { s.style.imageRendering = e.target.checked ? 'pixelated' : 'auto'; });
+    document.querySelectorAll('.grid .stage canvas, .grid .stage img').forEach(el => {
+      el.style.width = e.target.checked ? '200%' : '100%'; el.style.height = e.target.checked ? '200%' : '100%';
+      el.style.imageRendering = e.target.checked ? 'pixelated' : 'auto'; el.style.transform = e.target.checked ? 'translate(-25%, -25%)' : '';
+    });
+  };
+
+  let lastUrl;
+  function render() {
+    const pal = inputs.map(i => hex2rgb(i.value));
+    const blob = new Blob([recolorA(pngA, entries, pal)], { type: 'image/png' });
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    document.getElementById('img-a').src = lastUrl = URL.createObjectURL(blob);
+
+    const cb = document.getElementById('cv-b').getContext('2d'), ib = cb.createImageData(440, 240);
+    recolorB(gb, pal, ib); cb.putImageData(ib, 0, 0);
+
+    const cbs = document.getElementById('cv-base').getContext('2d'), is = cbs.createImageData(440, 240);
+    recolorBaseline(orig, origPal, pal, is); cbs.putImageData(is, 0, 0);
+  }
+  render();
+})();
+</script>
+</body>
+</html>
