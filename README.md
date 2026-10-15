@@ -11,6 +11,8 @@ dvou materiálů se uloží oba materiály a jejich poměr. Barvu pak dopočít�
 barva = mix(filament[m1], filament[m2], w) × stín + odlesk
 ```
 
+**[▶ Interaktivní demo](https://xfanta.github.io/repaint/)**: vlevo změň barvy slotů a uvidíš přebarvení všech variant.
+
 ![porovnání](out/comparison.png)
 
 ## Dokumentace
@@ -73,7 +75,7 @@ python3 poc/make_poc.py
 python3 -m http.server 8791
 ```
 
-Pak otevři http://localhost:8791/demo/. V demu se barvy slotů mění vlevo. Varianta A
+Pak otevři http://localhost:8791/demo/ (nebo online: https://xfanta.github.io/repaint/). V demu se barvy slotů mění vlevo. Varianta A
 v prohlížeči opravdu jen přepisuje bajty palety v PNG, varianta B běží jako
 per-pixel smyčka nad QOI.
 
